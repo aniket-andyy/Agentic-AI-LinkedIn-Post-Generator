@@ -1,0 +1,44 @@
+# ==========================================
+# UI & FRONTEND
+# ==========================================
+# The premium web interface framework
+streamlit>=1.31.0
+
+# ==========================================
+# AGENTIC ORCHESTRATION & CORE
+# ==========================================
+# The state-machine framework for the iterative Writer -> Reviewer loop
+langgraph>=0.2.0
+
+# Foundational abstractions for messages, prompts, and runnables
+langchain-core>=0.2.0
+
+# ==========================================
+# LLM PROVIDERS (Agents)
+# ==========================================
+# Connects the Writer Agent to Mistral API (Mistral Small)
+langchain-mistralai>=0.1.0
+
+# Connects the Reviewer Agent to Groq API (Llama 3.3 70B)
+langchain-groq>=0.1.0
+
+# ==========================================
+# TOOLING & WEB SEARCH
+# ==========================================
+# Official LangChain integration for Tavily Search
+langchain-tavily>=0.1.0
+
+# Core Tavily Python SDK (required by the LangChain integration)
+tavily-python>=0.3.0
+
+# Community integrations (often used for fallback tools or specific parsers)
+langchain-community>=0.2.0
+
+# ==========================================
+# ENVIRONMENT & UTILITIES
+# ==========================================
+# Loads API keys securely from your .env file
+python-dotenv>=1.0.0
+
+# Data validation and state typing (used by LangGraph/LangChain)
+pydantic>=2.0.0
