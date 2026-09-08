@@ -37,7 +37,7 @@ if tavily_api_key:
 # ============================================================
 
 writer_llm = ChatMistralAI(
-    model="mistral-small-latest",
+    model="mistral-small-2506",
     temperature=0.7,
 )
 
