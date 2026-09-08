@@ -1,5 +1,5 @@
+import os
 from typing import TypedDict, Annotated
-
 from dotenv import load_dotenv
 
 from langgraph.graph.message import add_messages
@@ -10,32 +10,26 @@ from langchain_mistralai import ChatMistralAI
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 
-
-# ============================================================
-# ENVIRONMENT
-# ============================================================
-
 load_dotenv()
 
 
-# ============================================================
-# TOOLS
-# ============================================================
+# =========================
+# Tavily Search Tool
+# =========================
+
+tavily_api_key = os.getenv("TAVILY_API_KEY")
 
 search_tool = TavilySearch(
-    max_results=3
+    max_results=3,
+    tavily_api_key=tavily_api_key
 )
 
 tools = [search_tool]
 
 
-# ============================================================
-# LLMs
-# ============================================================
-
-# ------------------------------------------------------------
-# Writer Agent - Mistral Small
-# ------------------------------------------------------------
+# =========================
+# Writer Agent - Mistral
+# =========================
 
 writer_llm = ChatMistralAI(
     model="mistral-small-latest",
@@ -45,9 +39,9 @@ writer_llm = ChatMistralAI(
 writer_llm_with_tools = writer_llm.bind_tools(tools)
 
 
-# ------------------------------------------------------------
-# Reviewer Agent - Groq Llama 3.3 70B
-# ------------------------------------------------------------
+# =========================
+# Reviewer Agent - Groq
+# =========================
 
 reviewer_llm = ChatGroq(
     model="llama-3.3-70b-versatile",
@@ -55,9 +49,9 @@ reviewer_llm = ChatGroq(
 )
 
 
-# ============================================================
-# STATE
-# ============================================================
+# =========================
+# State
+# =========================
 
 class State(TypedDict):
     topic: str
@@ -68,155 +62,75 @@ class State(TypedDict):
     attempt: int
 
 
-# ============================================================
-# WRITER AGENT
-# ============================================================
+# =========================
+# Writer
+# =========================
 
-WRITER_SYSTEM_PROMPT = (
-    "You are an expert LinkedIn content writer. Your job is to write "
-    "engaging, professional LinkedIn posts about the given topic. "
-    "If the topic requires up-to-date information, statistics, or "
-    "current trends, use the web search tool to gather fresh context "
-    "before writing. If you have already received feedback on a "
-    "previous draft, carefully address every point in the new draft. "
-    "Rules for good LinkedIn posts: strong hook in the first line, "
-    "1 clear takeaway, easy to skim (short paragraphs), around "
-    "150–200 words, ends with a question or call-to-action to invite "
-    "engagement. Do not use hashtags."
-)
-
-
-def writer_node(state: State) -> dict:
+def writer(state: State):
 
     attempt = state.get("attempt", 0) + 1
 
     topic = state["topic"]
-    previous_feedback = state.get("review_feedback", "")
+    feedback = state.get("review_feedback", "")
 
-    if attempt == 1:
+    if feedback:
+        prompt = f"""
+You are an expert LinkedIn content writer.
 
-        user_message = (
-            f"Write a LinkedIn post on this topic: {topic}. "
-            f"If you need current information, statistics, or trends, "
-            f"search the web first."
-        )
+Topic:
+{topic}
 
+Previous reviewer feedback:
+{feedback}
+
+Rewrite the LinkedIn post based on the feedback.
+
+Requirements:
+- Strong opening hook
+- One clear takeaway
+- Short paragraphs
+- Easy to scan
+- 150-200 words
+- Professional but human
+- End with a question or CTA
+- Do not use hashtags
+- Use web search when current information, statistics,
+  trends, or recent facts are required.
+"""
     else:
+        prompt = f"""
+You are an expert LinkedIn content writer.
 
-        user_message = (
-            f"Your previous draft on '{topic}' was rejected.\n\n"
-            f"Here is the reviewer's feedback:\n\n"
-            f"{previous_feedback}\n\n"
-            f"Write a new and improved draft that fixes every issue "
-            f"mentioned in the feedback. Do not repeat the same mistakes."
-        )
+Create a high-quality LinkedIn post about:
 
-    messages = [
-        ("system", WRITER_SYSTEM_PROMPT),
-        ("human", user_message),
-    ]
+{topic}
 
-    response = writer_llm_with_tools.invoke(messages)
+Requirements:
+- Strong opening hook
+- One clear takeaway
+- Short paragraphs
+- Easy to scan
+- 150-200 words
+- Professional but human
+- End with a question or CTA
+- Do not use hashtags
+- Use web search when current information, statistics,
+  trends, or recent facts are required.
+"""
 
-    return {
-        "messages": [
-            ("human", user_message),
-            response,
-        ],
-        "attempt": attempt,
-    }
-
-
-# ============================================================
-# TOOL NODE
-# ============================================================
-
-tool_node = ToolNode(tools)
-
-
-# ============================================================
-# EXTRACT DRAFT
-# ============================================================
-
-def extract_draft_node(state: State) -> dict:
-
-    last_message = state["messages"][-1]
-
-    draft = last_message.content
-
-    return {
-        "draft": draft
-    }
-
-
-# ============================================================
-# REVIEWER AGENT
-# ============================================================
-
-REVIEWER_SYSTEM_PROMPT = (
-    "You are a strict LinkedIn content reviewer. You judge whether a "
-    "post is publish-ready. Evaluate against these criteria:\n"
-    "1. Strong hook in the first line\n"
-    "2. One clear, valuable takeaway\n"
-    "3. Easy to skim — uses short paragraphs\n"
-    "4. Roughly 150-200 words\n"
-    "5. Ends with an engaging question or CTA\n"
-    "6. Professional but human tone (not corporate-robotic)\n"
-    "7. No hashtags\n\n"
-    "Respond in exactly this format:\n"
-    "VERDICT: APPROVED or REJECTED\n"
-    "FEEDBACK: <one short paragraph explaining why>\n\n"
-    "Be strict but fair. Approve only if the post genuinely meets all "
-    "criteria. Reject if even one criterion is clearly missing."
-)
-
-
-def reviewer_node(state: State) -> dict:
-
-    draft = state["draft"]
-
-    prompt = (
-        f"Review this LinkedIn post draft:\n\n"
-        f"{draft}\n\n"
-        f"Give your review using the required format."
+    response = writer_llm_with_tools.invoke(
+        state["messages"] + [("user", prompt)]
     )
 
-    response = reviewer_llm.invoke(
-        [
-            ("system", REVIEWER_SYSTEM_PROMPT),
-            ("human", prompt),
-        ]
-    )
-
-    review_text = response.content.strip()
-
-    verdict_section = review_text.upper().split(
-        "FEEDBACK",
-        1
-    )[0]
-
-    is_approved = "APPROVED" in verdict_section
-
-    if "FEEDBACK:" in review_text:
-
-        feedback = review_text.split(
-            "FEEDBACK:",
-            1
-        )[1].strip()
-
-    else:
-
-        feedback = review_text
-
     return {
-        "review_feedback": feedback,
-        "is_approved": is_approved,
+        "messages": [response],
+        "attempt": attempt
     }
 
 
-# ============================================================
-# ROUTER - WRITER → TOOL / DRAFT
-# ============================================================
+# =========================
+# Tool Decision
+# =========================
 
 def should_use_tool(state: State):
 
@@ -228,9 +142,72 @@ def should_use_tool(state: State):
     return "extract_draft"
 
 
-# ============================================================
-# ROUTER - REVIEWER → END / WRITER
-# ============================================================
+# =========================
+# Extract Draft
+# =========================
+
+def extract_draft(state: State):
+
+    last_message = state["messages"][-1]
+
+    draft = last_message.content
+
+    return {
+        "draft": draft
+    }
+
+
+# =========================
+# Reviewer
+# =========================
+
+def reviewer(state: State):
+
+    draft = state["draft"]
+
+    prompt = f"""
+You are a strict LinkedIn post reviewer.
+
+Review this LinkedIn post:
+
+{draft}
+
+Check:
+
+1. Strong opening hook
+2. Clear takeaway
+3. Easy to read and scan
+4. 150-200 words
+5. Strong CTA/question
+6. Human and professional tone
+7. No hashtags
+
+Return EXACTLY this format:
+
+VERDICT: APPROVED or REJECTED
+FEEDBACK: <one short paragraph explaining your decision>
+"""
+
+    response = reviewer_llm.invoke(prompt)
+
+    content = response.content
+
+    approved = "VERDICT: APPROVED" in content
+
+    feedback = content
+
+    if "FEEDBACK:" in content:
+        feedback = content.split("FEEDBACK:", 1)[1].strip()
+
+    return {
+        "is_approved": approved,
+        "review_feedback": feedback
+    }
+
+
+# =========================
+# Reviewer Decision
+# =========================
 
 def should_stop_looping(state: State):
 
@@ -243,41 +220,18 @@ def should_stop_looping(state: State):
     return "writer"
 
 
-# ============================================================
-# BUILD GRAPH
-# ============================================================
+# =========================
+# Graph
+# =========================
 
 graph = StateGraph(State)
 
-graph.add_node(
-    "writer",
-    writer_node
-)
+graph.add_node("writer", writer)
+graph.add_node("tools", ToolNode(tools))
+graph.add_node("extract_draft", extract_draft)
+graph.add_node("reviewer", reviewer)
 
-graph.add_node(
-    "tools",
-    tool_node
-)
-
-graph.add_node(
-    "extract_draft",
-    extract_draft_node
-)
-
-graph.add_node(
-    "reviewer",
-    reviewer_node
-)
-
-
-# ============================================================
-# GRAPH EDGES
-# ============================================================
-
-graph.add_edge(
-    START,
-    "writer"
-)
+graph.add_edge(START, "writer")
 
 graph.add_conditional_edges(
     "writer",
@@ -298,10 +252,5 @@ graph.add_conditional_edges(
     "reviewer",
     should_stop_looping
 )
-
-
-# ============================================================
-# COMPILE
-# ============================================================
 
 app = graph.compile()
