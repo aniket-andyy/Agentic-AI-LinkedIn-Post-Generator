@@ -1,4 +1,3 @@
-import os
 from typing import TypedDict, Annotated
 
 from dotenv import load_dotenv
@@ -7,8 +6,8 @@ from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 
+from langchain_mistralai import ChatMistralAI
 from langchain_groq import ChatGroq
-from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 
 
@@ -38,9 +37,8 @@ tools = [search_tool]
 # Writer Agent - Mistral Small
 # ------------------------------------------------------------
 
-writer_llm = ChatOpenAI(
+writer_llm = ChatMistralAI(
     model="mistral-small-latest",
-    base_url="https://api.mistral.ai/v1",
     temperature=0.7,
 )
 
@@ -89,10 +87,6 @@ WRITER_SYSTEM_PROMPT = (
 
 
 def writer_node(state: State) -> dict:
-    """
-    Writes or rewrites the LinkedIn post.
-    Can call Tavily when current information is required.
-    """
 
     attempt = state.get("attempt", 0) + 1
 
@@ -145,10 +139,6 @@ tool_node = ToolNode(tools)
 # ============================================================
 
 def extract_draft_node(state: State) -> dict:
-    """
-    Extracts the final text from the writer's last message
-    after tool execution is complete.
-    """
 
     last_message = state["messages"][-1]
 
@@ -182,10 +172,6 @@ REVIEWER_SYSTEM_PROMPT = (
 
 
 def reviewer_node(state: State) -> dict:
-    """
-    Reviews the current LinkedIn draft and decides
-    whether it should be approved or rewritten.
-    """
 
     draft = state["draft"]
 
@@ -204,12 +190,13 @@ def reviewer_node(state: State) -> dict:
 
     review_text = response.content.strip()
 
-    # Extract verdict
-    verdict_section = review_text.upper().split("FEEDBACK", 1)[0]
+    verdict_section = review_text.upper().split(
+        "FEEDBACK",
+        1
+    )[0]
 
     is_approved = "APPROVED" in verdict_section
 
-    # Extract feedback
     if "FEEDBACK:" in review_text:
 
         feedback = review_text.split(
@@ -257,11 +244,10 @@ def should_stop_looping(state: State):
 
 
 # ============================================================
-# BUILD LANGGRAPH
+# BUILD GRAPH
 # ============================================================
 
 graph = StateGraph(State)
-
 
 graph.add_node(
     "writer",
@@ -293,24 +279,20 @@ graph.add_edge(
     "writer"
 )
 
-
 graph.add_conditional_edges(
     "writer",
-    should_use_tool,
+    should_use_tool
 )
-
 
 graph.add_edge(
     "tools",
-    "reviewer"
+    "extract_draft"
 )
-
 
 graph.add_edge(
     "extract_draft",
     "reviewer"
 )
-
 
 graph.add_conditional_edges(
     "reviewer",
