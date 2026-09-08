@@ -1,5 +1,6 @@
 import os
 from typing import TypedDict, Annotated
+
 from dotenv import load_dotenv
 
 from langgraph.graph.message import add_messages
@@ -10,38 +11,46 @@ from langchain_mistralai import ChatMistralAI
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 
+
 load_dotenv()
 
 
-# =========================
-# Tavily Search Tool
-# =========================
+# ============================================================
+# OPTIONAL TAVILY TOOL
+# ============================================================
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
 
-search_tool = TavilySearch(
-    max_results=3,
-    tavily_api_key=tavily_api_key
-)
+tools = []
 
-tools = [search_tool]
+if tavily_api_key:
+    search_tool = TavilySearch(
+        max_results=3,
+        tavily_api_key=tavily_api_key
+    )
+
+    tools = [search_tool]
 
 
-# =========================
-# Writer Agent - Mistral
-# =========================
+# ============================================================
+# WRITER AGENT - MISTRAL
+# ============================================================
 
 writer_llm = ChatMistralAI(
     model="mistral-small-latest",
     temperature=0.7,
 )
 
-writer_llm_with_tools = writer_llm.bind_tools(tools)
+# Only bind tools if Tavily is available
+if tools:
+    writer_llm_with_tools = writer_llm.bind_tools(tools)
+else:
+    writer_llm_with_tools = writer_llm
 
 
-# =========================
-# Reviewer Agent - Groq
-# =========================
+# ============================================================
+# REVIEWER AGENT - GROQ
+# ============================================================
 
 reviewer_llm = ChatGroq(
     model="llama-3.3-70b-versatile",
@@ -49,9 +58,9 @@ reviewer_llm = ChatGroq(
 )
 
 
-# =========================
-# State
-# =========================
+# ============================================================
+# STATE
+# ============================================================
 
 class State(TypedDict):
     topic: str
@@ -62,9 +71,9 @@ class State(TypedDict):
     attempt: int
 
 
-# =========================
-# Writer
-# =========================
+# ============================================================
+# WRITER NODE
+# ============================================================
 
 def writer(state: State):
 
@@ -74,6 +83,7 @@ def writer(state: State):
     feedback = state.get("review_feedback", "")
 
     if feedback:
+
         prompt = f"""
 You are an expert LinkedIn content writer.
 
@@ -83,7 +93,7 @@ Topic:
 Previous reviewer feedback:
 {feedback}
 
-Rewrite the LinkedIn post based on the feedback.
+Rewrite the LinkedIn post based on the reviewer feedback.
 
 Requirements:
 - Strong opening hook
@@ -94,10 +104,10 @@ Requirements:
 - Professional but human
 - End with a question or CTA
 - Do not use hashtags
-- Use web search when current information, statistics,
-  trends, or recent facts are required.
 """
+
     else:
+
         prompt = f"""
 You are an expert LinkedIn content writer.
 
@@ -114,8 +124,14 @@ Requirements:
 - Professional but human
 - End with a question or CTA
 - Do not use hashtags
-- Use web search when current information, statistics,
-  trends, or recent facts are required.
+"""
+
+        # Tell the model that web search is available only
+        # when Tavily API is configured.
+        if tools:
+            prompt += """
+- Use the web search tool when current information,
+  statistics, trends, or recent facts are required.
 """
 
     response = writer_llm_with_tools.invoke(
@@ -128,13 +144,17 @@ Requirements:
     }
 
 
-# =========================
-# Tool Decision
-# =========================
+# ============================================================
+# WRITER ROUTER
+# ============================================================
 
 def should_use_tool(state: State):
 
     last_message = state["messages"][-1]
+
+    # If Tavily isn't configured, there cannot be a tool call.
+    if not tools:
+        return "extract_draft"
 
     if getattr(last_message, "tool_calls", None):
         return "tools"
@@ -142,24 +162,31 @@ def should_use_tool(state: State):
     return "extract_draft"
 
 
-# =========================
-# Extract Draft
-# =========================
+# ============================================================
+# TAVILY TOOL NODE
+# ============================================================
+
+if tools:
+
+    tool_node = ToolNode(tools)
+
+
+# ============================================================
+# EXTRACT DRAFT
+# ============================================================
 
 def extract_draft(state: State):
 
     last_message = state["messages"][-1]
 
-    draft = last_message.content
-
     return {
-        "draft": draft
+        "draft": last_message.content
     }
 
 
-# =========================
-# Reviewer
-# =========================
+# ============================================================
+# REVIEWER NODE
+# ============================================================
 
 def reviewer(state: State):
 
@@ -205,9 +232,9 @@ FEEDBACK: <one short paragraph explaining your decision>
     }
 
 
-# =========================
-# Reviewer Decision
-# =========================
+# ============================================================
+# REVIEWER ROUTER
+# ============================================================
 
 def should_stop_looping(state: State):
 
@@ -220,16 +247,20 @@ def should_stop_looping(state: State):
     return "writer"
 
 
-# =========================
-# Graph
-# =========================
+# ============================================================
+# BUILD LANGGRAPH
+# ============================================================
 
 graph = StateGraph(State)
 
 graph.add_node("writer", writer)
-graph.add_node("tools", ToolNode(tools))
 graph.add_node("extract_draft", extract_draft)
 graph.add_node("reviewer", reviewer)
+
+# Add Tavily node only when API key exists
+if tools:
+    graph.add_node("tools", tool_node)
+
 
 graph.add_edge(START, "writer")
 
@@ -238,10 +269,11 @@ graph.add_conditional_edges(
     should_use_tool
 )
 
-graph.add_edge(
-    "tools",
-    "extract_draft"
-)
+if tools:
+    graph.add_edge(
+        "tools",
+        "extract_draft"
+    )
 
 graph.add_edge(
     "extract_draft",
@@ -252,5 +284,10 @@ graph.add_conditional_edges(
     "reviewer",
     should_stop_looping
 )
+
+
+# ============================================================
+# COMPILE
+# ============================================================
 
 app = graph.compile()
