@@ -7,7 +7,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 
-from langchain_mistralai import ChatMistralAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 
@@ -16,7 +16,7 @@ load_dotenv()
 
 
 # ============================================================
-# OPTIONAL TAVILY SEARCH TOOL
+# TAVILY - OPTIONAL
 # ============================================================
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -33,17 +33,15 @@ if tavily_api_key:
 
 
 # ============================================================
-# LLMs
+# GEMINI - WRITER
 # ============================================================
 
-# -------------------------
-# Writer - Mistral
-# -------------------------
-
-writer_llm = ChatMistralAI(
-    model="mistral-small-2506",
-    temperature=0.7
+writer_llm = ChatGoogleGenerativeAI(
+    model="gemini-3.8-flash",
+    temperature=0.7,
+    google_api_key=os.getenv("GEMINI_API_KEY")
 )
+
 
 # Bind Tavily only when the API key exists
 if tools:
@@ -52,13 +50,14 @@ else:
     writer_llm_with_tools = writer_llm
 
 
-# -------------------------
-# Reviewer - Groq
-# -------------------------
+# ============================================================
+# GROQ - REVIEWER
+# ============================================================
 
 reviewer_llm = ChatGroq(
     model="llama-3.3-70b-versatile",
-    temperature=0.2
+    temperature=0.2,
+    groq_api_key=os.getenv("GROQ_API_KEY")
 )
 
 
@@ -76,36 +75,33 @@ class State(TypedDict):
 
 
 # ============================================================
-# WRITER SYSTEM PROMPT
+# WRITER PROMPT
 # ============================================================
 
-WRITER_SYSTEM_PROMPT = """
+writer_system_prompt = """
 You are an expert LinkedIn content writer.
 
-Your job is to write engaging, professional LinkedIn posts
-about the given topic.
+Your task is to create a high-quality LinkedIn post.
 
-If current information, statistics, recent events, or trends
-are required and a web search tool is available, use the web
-search tool before writing.
+Requirements:
 
-If web search is not available, write the post using your
-existing knowledge. Do not mention that web search is
-unavailable.
+- Start with a strong hook.
+- Make the post engaging and human.
+- Focus on ONE clear main takeaway.
+- Use short paragraphs.
+- Keep the post between 150 and 200 words.
+- End with a meaningful question or call-to-action.
+- Do NOT use hashtags.
+- Avoid unnecessary emojis.
+- Avoid generic AI-sounding language.
+- Make the writing professional but natural.
 
-If you have received feedback on a previous draft, carefully
-address every point in the feedback.
+If the topic requires current information, statistics,
+recent developments, or facts, use the available web
+search tool.
 
-Rules:
-
-1. Strong hook in the first line
-2. One clear and valuable takeaway
-3. Easy to skim
-4. Short paragraphs
-5. Around 150-200 words
-6. Professional but human tone
-7. End with a question or call-to-action
-8. Do not use hashtags
+If reviewer feedback is provided, improve the previous
+draft according to that feedback.
 """
 
 
@@ -113,57 +109,41 @@ Rules:
 # WRITER NODE
 # ============================================================
 
-def writer_node(state: State) -> dict:
-
-    attempt = state.get("attempt", 0) + 1
+def writer_node(state: State):
 
     topic = state["topic"]
-    previous_feedback = state.get("review_feedback", "")
+    feedback = state.get("review_feedback", "")
+    attempt = state.get("attempt", 0)
 
-    # -------------------------
-    # First attempt
-    # -------------------------
+    attempt += 1
 
-    if attempt == 1:
-
+    if feedback:
         user_message = f"""
-Write a LinkedIn post about:
+Create an improved LinkedIn post about:
 
 {topic}
 
-Create the best possible post following all the rules.
+This is revision attempt {attempt}.
 
-If the topic requires current information and the web search
-tool is available, search the web first.
+Previous reviewer feedback:
+{feedback}
+
+Fix the problems identified by the reviewer.
+Return ONLY the LinkedIn post.
 """
-
-    # -------------------------
-    # Rewrite
-    # -------------------------
-
     else:
-
         user_message = f"""
-Your previous LinkedIn post about:
+Create a LinkedIn post about:
 
 {topic}
 
-was rejected by the reviewer.
+This is the first draft.
 
-Here is the reviewer's feedback:
-
-{previous_feedback}
-
-Write a completely improved version of the post.
-
-Fix every issue mentioned in the feedback.
-Do not repeat the same mistakes.
-
-Follow all LinkedIn writing requirements.
+Return ONLY the LinkedIn post.
 """
 
     messages = [
-        ("system", WRITER_SYSTEM_PROMPT),
+        ("system", writer_system_prompt),
         ("human", user_message)
     ]
 
@@ -176,7 +156,7 @@ Follow all LinkedIn writing requirements.
 
 
 # ============================================================
-# TAVILY TOOL NODE
+# TOOL NODE
 # ============================================================
 
 if tools:
@@ -187,125 +167,123 @@ if tools:
 # EXTRACT DRAFT
 # ============================================================
 
-def extract_draft_node(state: State) -> dict:
+def extract_draft_node(state: State):
 
     last_message = state["messages"][-1]
 
-    draft = last_message.content
+    content = last_message.content
+
+    # Gemini can sometimes return structured content
+    if isinstance(content, list):
+
+        text_parts = []
+
+        for item in content:
+
+            if isinstance(item, dict):
+
+                if item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+
+            elif isinstance(item, str):
+                text_parts.append(item)
+
+        content = "".join(text_parts)
 
     return {
-        "draft": draft
+        "draft": content
     }
 
 
 # ============================================================
-# REVIEWER SYSTEM PROMPT
+# REVIEWER
 # ============================================================
 
-REVIEWER_SYSTEM_PROMPT = """
-You are a strict LinkedIn content reviewer.
+reviewer_system_prompt = """
+You are a strict LinkedIn post reviewer.
 
-You judge whether a LinkedIn post is publish-ready.
+Review the provided LinkedIn post.
 
-Evaluate the post against these criteria:
+Check:
 
-1. Strong hook in the first line
-2. One clear and valuable takeaway
-3. Easy to skim
-4. Short paragraphs
-5. Roughly 150-200 words
-6. Ends with an engaging question or CTA
-7. Professional but human tone
-8. Not corporate-robotic
-9. No hashtags
+1. Strong opening hook
+2. One clear takeaway
+3. Good readability and skimmability
+4. Between 150 and 200 words
+5. Professional but human tone
+6. Meaningful CTA or question at the end
+7. No hashtags
+8. No unnecessary repetition
+9. No generic AI-sounding language
 
-Respond in exactly this format:
+Return EXACTLY this format:
 
-VERDICT: APPROVED or REJECTED
+VERDICT: APPROVED
+
+or
+
+VERDICT: REJECTED
+
 FEEDBACK: <one short paragraph explaining why>
-
-Be strict but fair.
-
-Approve only if the post genuinely meets the criteria.
-Reject if one or more important criteria are clearly missing.
 """
 
 
-# ============================================================
-# REVIEWER NODE
-# ============================================================
-
-def reviewer_node(state: State) -> dict:
+def reviewer_node(state: State):
 
     draft = state["draft"]
 
-    prompt = f"""
-Review this LinkedIn post draft:
+    review_prompt = f"""
+Review this LinkedIn post:
 
--------------------------
+--- POST START ---
+
 {draft}
--------------------------
 
-Give your review using the exact required format.
+--- POST END ---
 """
 
-    response = reviewer_llm.invoke(
-        [
-            ("system", REVIEWER_SYSTEM_PROMPT),
-            ("human", prompt)
-        ]
-    )
+    response = reviewer_llm.invoke([
+        ("system", reviewer_system_prompt),
+        ("human", review_prompt)
+    ])
 
-    review_text = response.content.strip()
+    content = response.content
 
-    # Determine verdict
-    first_part = review_text.upper().split("FEEDBACK", 1)[0]
+    verdict = "APPROVED" in content.upper()
 
-    is_approved = "VERDICT: APPROVED" in first_part
+    feedback = ""
 
-    # Extract feedback
-    if "FEEDBACK:" in review_text:
-        feedback = review_text.split(
-            "FEEDBACK:", 1
-        )[1].strip()
+    if "FEEDBACK:" in content:
+        feedback = content.split("FEEDBACK:", 1)[1].strip()
     else:
-        feedback = review_text
+        feedback = content
 
     return {
         "review_feedback": feedback,
-        "is_approved": is_approved
+        "is_approved": verdict
     }
 
 
 # ============================================================
-# WRITER ROUTER
+# ROUTERS
 # ============================================================
 
-def should_use_tool(state: State):
+def writer_router(state: State):
 
     last_message = state["messages"][-1]
 
-    # Tavily is not configured
-    if not tools:
-        return "extract_draft"
-
-    # Writer requested a tool
-    if getattr(last_message, "tool_calls", None):
+    # If Gemini requested a tool
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
 
     return "extract_draft"
 
 
-# ============================================================
-# REVIEWER ROUTER
-# ============================================================
-
-def should_stop_looping(state: State):
+def reviewer_router(state: State):
 
     if state["is_approved"]:
         return END
 
-    # Maximum 3 writer attempts
     if state["attempt"] >= 3:
         return END
 
@@ -318,60 +296,53 @@ def should_stop_looping(state: State):
 
 graph = StateGraph(State)
 
-graph.add_node(
-    "writer",
-    writer_node
-)
 
-graph.add_node(
-    "extract_draft",
-    extract_draft_node
-)
+graph.add_node("writer", writer_node)
+graph.add_node("extract_draft", extract_draft_node)
+graph.add_node("reviewer", reviewer_node)
 
-graph.add_node(
-    "reviewer",
-    reviewer_node
-)
 
-# Add Tavily node only if API key exists
+if tools:
+    graph.add_node("tools", tool_node)
+
+
+graph.add_edge(START, "writer")
+
+
+# Writer decides whether to use Tavily
 if tools:
 
-    graph.add_node(
-        "tools",
-        tool_node
+    graph.add_conditional_edges(
+        "writer",
+        writer_router,
+        {
+            "tools": "tools",
+            "extract_draft": "extract_draft"
+        }
     )
 
+    # After Tavily, go back to writer so Gemini
+    # can use the search results to create the post.
+    graph.add_edge("tools", "writer")
 
-# ============================================================
-# EDGES
-# ============================================================
+else:
 
-graph.add_edge(
-    START,
-    "writer"
-)
+    graph.add_edge("writer", "extract_draft")
 
-graph.add_conditional_edges(
-    "writer",
-    should_use_tool
-)
-
-# If Tavily exists
-if tools:
-
-    graph.add_edge(
-        "tools",
-        "extract_draft"
-    )
 
 graph.add_edge(
     "extract_draft",
     "reviewer"
 )
 
+
 graph.add_conditional_edges(
     "reviewer",
-    should_stop_looping
+    reviewer_router,
+    {
+        "writer": "writer",
+        END: END
+    }
 )
 
 
