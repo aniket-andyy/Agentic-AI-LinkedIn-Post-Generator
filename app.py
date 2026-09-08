@@ -1,6 +1,6 @@
 import streamlit as st
 import time
-from backend import app
+from main import app 
 
 # --- PAGE CONFIG ---
 st.set_page_config(
