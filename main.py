@@ -6,6 +6,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
+from langchain_core.messages import AIMessage, ToolMessage # Added for message type checking
 
 # --- API Keys (Streamlit automatically injects secrets into os.environ) ---
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -17,7 +18,8 @@ search_tool = TavilySearch(max_results=3, api_key=TAVILY_API_KEY)
 tools = [search_tool]
 
 # --- LLMs ---
-writer_llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.7, google_api_key=GOOGLE_API_KEY)
+# Note: Ensure your model name is valid. Changed to standard gemini-1.5-flash or gemini-2.0-flash
+writer_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.7, google_api_key=GOOGLE_API_KEY)
 writer_llm_with_tools = writer_llm.bind_tools(tools)
 
 reviewer_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2, api_key=GROQ_API_KEY)
@@ -61,19 +63,46 @@ def writer_node(state: State) -> dict:
     topic = state["topic"]
     previous_feedback = state.get('review_feedback', '')
 
-    if attempt == 1:
-        user_message = f"Write a LinkedIn post on this topic: {topic}. If you need current info, search the web first."
-    else:
-        user_message = (
-            f"Your previous draft on '{topic}' was rejected. "
-            f"Here is the reviewer's feedback:\n\n{previous_feedback}\n\n"
-            f"Write a new, improved draft that fixes every issue mentioned. Do not repeat the same mistake."
-        )
-    messages = [("system", WRITER_SYSTEM_PROMPT), ("human", user_message)]
+    # 1. Get existing message history from state
+    messages = list(state.get("messages", []))
+
+    # 2. Determine if we need to inject a new system/human prompt
+    # We inject a prompt if it's the very first run, OR if we are returning from a reviewer rejection.
+    # If we are returning from the `tools` node, the last message is a ToolMessage, so we just continue the conversation.
+    add_prompt = False
+    if not messages:
+        add_prompt = True
+    elif messages and isinstance(messages[-1], AIMessage) and not getattr(messages[-1], 'tool_calls', None):
+        # The last message was a final text response (no tool calls). 
+        # This means we looped back from the reviewer.
+        add_prompt = True
+
+    state_update_messages = []
+
+    if add_prompt:
+        if attempt == 1:
+            user_message = f"Write a LinkedIn post on this topic: {topic}. If you need current info, search the web first."
+        else:
+            user_message = (
+                f"Your previous draft on '{topic}' was rejected. "
+                f"Here is the reviewer's feedback:\n\n{previous_feedback}\n\n"
+                f"Write a new, improved draft that fixes every issue mentioned. Do not repeat the same mistake."
+            )
+        
+        # Add system and human prompts to the message list
+        new_messages = [
+            ("system", WRITER_SYSTEM_PROMPT), 
+            ("human", user_message)
+        ]
+        messages.extend(new_messages)
+        state_update_messages.extend(new_messages)
+
+    # 3. Invoke LLM with the fully constructed message history (INCLUDING tool results)
     response = writer_llm_with_tools.invoke(messages)
+    state_update_messages.append(response)
 
     return {
-        "messages": [("human", user_message), response],
+        "messages": state_update_messages, # LangGraph's add_messages reducer will append this safely
         "attempt": attempt
     }
 
