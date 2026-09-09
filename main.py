@@ -19,7 +19,7 @@ tools = [search_tool]
 
 # --- LLMs ---
 # Note: Ensure your model name is valid. Changed to standard gemini-1.5-flash or gemini-2.0-flash
-writer_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.7, google_api_key=GOOGLE_API_KEY)
+writer_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.7, google_api_key=GOOGLE_API_KEY)
 writer_llm_with_tools = writer_llm.bind_tools(tools)
 
 reviewer_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2, api_key=GROQ_API_KEY)
