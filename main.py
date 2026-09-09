@@ -17,7 +17,7 @@ search_tool = TavilySearch(max_results=3, api_key=TAVILY_API_KEY)
 tools = [search_tool]
 
 # --- LLMs ---
-writer_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7, google_api_key=GOOGLE_API_KEY)
+writer_llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.7, google_api_key=GOOGLE_API_KEY)
 writer_llm_with_tools = writer_llm.bind_tools(tools)
 
 reviewer_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2, api_key=GROQ_API_KEY)
