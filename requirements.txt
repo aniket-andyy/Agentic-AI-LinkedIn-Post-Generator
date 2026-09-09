@@ -1,7 +1,9 @@
-streamlit
-langgraph
-langchain
-langchain-google-genai
-langchain-groq
-langchain-tavily
-python-dotenv
+streamlit>=1.37.0
+langgraph>=0.2.14
+langchain-core>=0.2.35
+langchain-google-genai>=1.0.10
+langchain-groq>=0.1.9
+langchain-tavily>=0.1.0
+tavily-python>=0.3.9
+langchain-openai>=0.1.22
+python-dotenv>=1.0.1
