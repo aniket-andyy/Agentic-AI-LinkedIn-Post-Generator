@@ -6,7 +6,6 @@ from langgraph.prebuilt import ToolNode
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
-from langchain_core.messages import AIMessage, ToolMessage # Added for message type checking
 
 # --- API Keys (Streamlit automatically injects secrets into os.environ) ---
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -18,7 +17,6 @@ search_tool = TavilySearch(max_results=3, api_key=TAVILY_API_KEY)
 tools = [search_tool]
 
 # --- LLMs ---
-# Note: Ensure your model name is valid. Changed to standard gemini-1.5-flash or gemini-2.0-flash
 writer_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.7, google_api_key=GOOGLE_API_KEY)
 writer_llm_with_tools = writer_llm.bind_tools(tools)
 
@@ -63,18 +61,13 @@ def writer_node(state: State) -> dict:
     topic = state["topic"]
     previous_feedback = state.get('review_feedback', '')
 
-    # 1. Get existing message history from state
     messages = list(state.get("messages", []))
-
-    # 2. Determine if we need to inject a new system/human prompt
-    # We inject a prompt if it's the very first run, OR if we are returning from a reviewer rejection.
-    # If we are returning from the `tools` node, the last message is a ToolMessage, so we just continue the conversation.
     add_prompt = False
+    
     if not messages:
         add_prompt = True
-    elif messages and isinstance(messages[-1], AIMessage) and not getattr(messages[-1], 'tool_calls', None):
-        # The last message was a final text response (no tool calls). 
-        # This means we looped back from the reviewer.
+    elif messages and isinstance(messages[-1], type(messages[0])) and not getattr(messages[-1], 'tool_calls', None):
+        # Check if we returned from a text-only message (Reviewer rejection loop)
         add_prompt = True
 
     state_update_messages = []
@@ -89,7 +82,6 @@ def writer_node(state: State) -> dict:
                 f"Write a new, improved draft that fixes every issue mentioned. Do not repeat the same mistake."
             )
         
-        # Add system and human prompts to the message list
         new_messages = [
             ("system", WRITER_SYSTEM_PROMPT), 
             ("human", user_message)
@@ -97,21 +89,39 @@ def writer_node(state: State) -> dict:
         messages.extend(new_messages)
         state_update_messages.extend(new_messages)
 
-    # 3. Invoke LLM with the fully constructed message history (INCLUDING tool results)
+    # Invoke LLM with the fully constructed message history
     response = writer_llm_with_tools.invoke(messages)
     state_update_messages.append(response)
 
     return {
-        "messages": state_update_messages, # LangGraph's add_messages reducer will append this safely
+        "messages": state_update_messages,
         "attempt": attempt
     }
 
 tool_node = ToolNode(tools)
 
 def extract_draft_node(state: State) -> dict:
+    """Extracts the final text draft from the last AI message."""
     last_message = state['messages'][-1]
-    draft = last_message.content if hasattr(last_message, 'content') else ""
-    return {"draft": draft}
+    draft = ""
+    
+    # Robustly extract text from LangChain message content
+    content = getattr(last_message, 'content', "")
+    
+    if isinstance(content, str):
+        draft = content
+    elif isinstance(content, list):
+        # FIX: Gemini returns content as a list of dicts when tool-calling is enabled.
+        # e.g., [{'type': 'text', 'text': 'actual post...', 'extras': {...}}]
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict) and "text" in block:
+                text_parts.append(block["text"])
+            elif isinstance(block, str):
+                text_parts.append(block)
+        draft = "\n".join(text_parts)
+        
+    return {"draft": draft.strip()}
 
 def reviewer_node(state: State) -> dict:
     draft = state['draft']
@@ -145,7 +155,6 @@ graph.add_node("reviewer", reviewer_node)
 graph.add_edge(START, "writer")
 graph.add_conditional_edges("writer", should_use_tool, {"tools": "tools", "extract_draft": "extract_draft"})
 
-# FIX: Tools must return to the writer so it can write the draft using search context!
 graph.add_edge("tools", "writer") 
 graph.add_edge("extract_draft", "reviewer")
 graph.add_conditional_edges("reviewer", should_stop_looping)
