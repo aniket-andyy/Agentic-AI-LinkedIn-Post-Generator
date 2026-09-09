@@ -22,7 +22,7 @@ tools = [search_tool]
 writer_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.7, google_api_key=GOOGLE_API_KEY)
 writer_llm_with_tools = writer_llm.bind_tools(tools)
 
-reviewer_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.2, api_key=GROQ_API_KEY)
+reviewer_llm = ChatGroq(model="openai/gpt-oss-20b", temperature=0.2, api_key=GROQ_API_KEY)
 
 # --- State Definition ---
 class State(TypedDict):
